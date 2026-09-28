@@ -1,6 +1,7 @@
 mod preferences;
 mod qr;
 mod rename;
+mod resources;
 mod tmdb;
 
 use preferences::{PreferencesView, SavedPreferences};
@@ -113,8 +114,15 @@ fn update_preferences(
 
 pub fn run() {
     tauri::Builder::default()
+        .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
+                window.app_handle().exit(0);
+            }
+        })
         .on_page_load(|webview, payload| {
-            if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+            if webview.label() == "main"
+                && matches!(payload.event(), tauri::webview::PageLoadEvent::Finished)
+            {
                 let _ = webview.set_focus();
             }
         })
@@ -153,6 +161,9 @@ pub fn run() {
             let data_dir = app.path().app_local_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
             let preferences_path = data_dir.join("preferences.json");
+            app.manage(resources::ResourceStore::new(
+                data_dir.join("resource-sites.json"),
+            ));
             let saved = preferences::load(&preferences_path).unwrap_or_default();
             let shortcut = preferences::normalize_shortcut(&saved.shortcut)
                 .map_err(std::io::Error::other)?
@@ -172,21 +183,34 @@ pub fn run() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            qr::decode_clipboard,
-            qr::decode_image,
-            qr::decode_image_path,
-            qr::capture_qr,
-            qr::copy_text,
-            preview_renames,
-            apply_renames,
-            undo_rename,
-            rename_history,
-            tmdb::search_tmdb,
-            shortcut_available,
-            get_preferences,
-            update_preferences,
-        ])
+        .invoke_handler(|invoke: tauri::ipc::Invoke<tauri::Wry>| {
+            // Apply this to every app command, including commands added later.
+            // Remote resource windows never receive local filesystem/clipboard IPC.
+            if !resources::is_main_window(invoke.message.webview().label()) {
+                invoke.resolver.reject("此窗口不能调用本地应用命令。");
+                return true;
+            }
+            let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
+                qr::decode_clipboard,
+                qr::decode_image,
+                qr::decode_image_path,
+                qr::capture_qr,
+                qr::copy_text,
+                preview_renames,
+                apply_renames,
+                undo_rename,
+                rename_history,
+                tmdb::search_tmdb,
+                shortcut_available,
+                get_preferences,
+                update_preferences,
+                resources::list_resource_sites,
+                resources::save_resource_site,
+                resources::delete_resource_site,
+                resources::open_resource_site,
+            ];
+            handler(invoke)
+        })
         .run(tauri::generate_context!())
         .expect("Reelink could not start");
 }

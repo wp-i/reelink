@@ -1,8 +1,15 @@
-import { useCallback, useEffect, useRef, useState, type ChangeEvent, type DragEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type DragEvent,
+  type ReactNode,
+} from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
-import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window'
 import { open } from '@tauri-apps/plugin-dialog'
 import {
   ArrowRight,
@@ -28,6 +35,7 @@ import type {
   TmdbMatch,
 } from './types'
 import './styles.css'
+import ResourceSites from './ResourceSites'
 
 declare global {
   interface Window {
@@ -61,9 +69,32 @@ function cleanTmdbName(match: TmdbMatch, row: PreviewRow) {
   return `${title}${match.year ? ` (${match.year})` : ''}${row.isDirectory ? '' : row.extension}`
 }
 
+function ToolEmptyState({
+  icon,
+  title,
+  description,
+  actions,
+}: {
+  icon: ReactNode
+  title: string
+  description: string
+  actions: ReactNode
+}) {
+  return (
+    <div className="empty">
+      <div className="tool-card">
+        <div className="empty-symbol">{icon}</div>
+        <p>{title}</p>
+        <small>{description}</small>
+        {actions}
+      </div>
+    </div>
+  )
+}
+
 export default function App() {
   const [tab, setTab] = useState<'qr' | 'rename'>('qr')
-  const [shortcut, setShortcut] = useState('Ctrl+Shift+Q')
+  const [shortcut, setShortcut] = useState('Alt+Q')
   const [shortcutDraft, setShortcutDraft] = useState<string | null>(null)
   const [prefsBusy, setPrefsBusy] = useState(false)
   const [prefsError, setPrefsError] = useState('')
@@ -83,11 +114,6 @@ export default function App() {
   const [tmdbMatches, setTmdbMatches] = useState<TmdbMatch[]>([])
   const [tmdbBusy, setTmdbBusy] = useState(false)
   const imageInput = useRef<HTMLInputElement>(null)
-  const headerRef = useRef<HTMLElement>(null)
-  const workspaceRef = useRef<HTMLElement>(null)
-  const footerRef = useRef<HTMLElement>(null)
-  const resizeEpochRef = useRef(0)
-  const resizeQueueRef = useRef<Promise<void>>(Promise.resolve())
   const qrBusyRef = useRef(false)
   const renameBusyRef = useRef(false)
   const tabRef = useRef(tab)
@@ -218,6 +244,7 @@ export default function App() {
       .catch(showError)
     void getCurrentWebview()
       .onDragDropEvent((event) => {
+        if (document.querySelector('[data-resource-popover]')) return
         if (event.payload.type === 'enter' || event.payload.type === 'over') setDropActive(true)
         if (event.payload.type === 'leave') setDropActive(false)
         if (event.payload.type !== 'drop') return
@@ -229,7 +256,7 @@ export default function App() {
           )
           if (path) void runQr(() => invoke<QrResult>('decode_image_path', { path }))
           else showError('请拖入图片文件。')
-        } else void previewPaths(paths)
+        } else if (tabRef.current === 'rename') void previewPaths(paths)
       })
       .then((unlisten) => {
         if (active) cleanups.push(unlisten)
@@ -244,6 +271,11 @@ export default function App() {
   useEffect(() => {
     const onPaste = (event: ClipboardEvent) => {
       if (tabRef.current !== 'qr') return
+      if (
+        event.target instanceof HTMLElement &&
+        event.target.closest('input, textarea, [contenteditable="true"]')
+      )
+        return
       const image = Array.from(event.clipboardData?.files ?? []).find((file) =>
         file.type.startsWith('image/'),
       )
@@ -272,72 +304,6 @@ export default function App() {
       setPrefsBusy(false)
     }
   }
-  const lastSizingTab = useRef<string | null>(null)
-  useEffect(() => {
-    if (!desktop) return
-    let active = true
-    let frame = 0
-    const nativeWindow = getCurrentWindow()
-
-    const scheduleResize = () => {
-      const epoch = ++resizeEpochRef.current
-      cancelAnimationFrame(frame)
-      frame = requestAnimationFrame(() => {
-        resizeQueueRef.current = resizeQueueRef.current
-          .then(async () => {
-            if (!active || epoch !== resizeEpochRef.current) return
-            const contentHeight =
-              (headerRef.current?.getBoundingClientRect().height ?? 0) +
-              (workspaceRef.current?.scrollHeight ?? 0) +
-              (footerRef.current?.getBoundingClientRect().height ?? 0)
-            try {
-              const [inner, scale, maximized] = await Promise.all([
-                nativeWindow.innerSize(),
-                nativeWindow.scaleFactor(),
-                nativeWindow.isMaximized(),
-              ])
-              if (!active || epoch !== resizeEpochRef.current || maximized) return
-              const desiredHeight = Math.max(154, Math.min(610, Math.ceil(contentHeight + 1)))
-              const desiredWidth =
-                lastSizingTab.current !== tab ? (tab === 'qr' ? 460 : 700) : inner.width / scale
-              lastSizingTab.current = tab
-              if (
-                Math.abs(inner.height / scale - desiredHeight) < 1 &&
-                Math.abs(inner.width / scale - desiredWidth) < 1
-              )
-                return
-              await nativeWindow.setSize(new LogicalSize(desiredWidth, desiredHeight))
-            } catch {
-              // A sizing failure should leave the existing window usable.
-            }
-          })
-          .catch(() => {})
-      })
-    }
-
-    const observer = new ResizeObserver(scheduleResize)
-    if (headerRef.current) observer.observe(headerRef.current)
-    if (workspaceRef.current) observer.observe(workspaceRef.current)
-    if (footerRef.current) observer.observe(footerRef.current)
-    scheduleResize()
-    return () => {
-      active = false
-      resizeEpochRef.current++
-      cancelAnimationFrame(frame)
-      observer.disconnect()
-    }
-  }, [
-    tab,
-    rows.length,
-    qr,
-    notice,
-    tmdbRow,
-    tmdbMatches.length,
-    shortcutDraft,
-    prefsError,
-    history,
-  ])
-
   const copyText = async (text: string) => {
     try {
       if (desktop) await invoke('copy_text', { text })
@@ -456,6 +422,50 @@ export default function App() {
   }
   const folders = rows.filter((row) => row.isDirectory).length
   const files = rows.length - folders
+  const actions = (
+    <div className="toolbar-actions">
+      {tab === 'qr' ? (
+        <>
+          <button
+            className="primary"
+            disabled={qrBusy || !desktop}
+            onClick={() => void runQr(() => invoke<QrResult>('decode_clipboard'))}
+          >
+            {qrBusy ? <LoaderCircle size={14} className="spin" /> : <ClipboardPaste size={14} />}
+            粘贴
+          </button>
+          <button
+            className="tool-button"
+            disabled={qrBusy || !desktop}
+            onClick={() => imageInput.current?.click()}
+          >
+            <ImagePlus size={14} />
+            打开图片…
+          </button>
+        </>
+      ) : (
+        <>
+          <button
+            className="primary"
+            disabled={renameBusy || !desktop}
+            onClick={() => void pickRename(false)}
+          >
+            <FileVideo size={14} />
+            选择文件…
+          </button>
+          <button
+            className="tool-button"
+            disabled={renameBusy || !desktop}
+            onClick={() => void pickRename(true)}
+          >
+            <Folder size={14} />
+            选择文件夹…
+          </button>
+        </>
+      )}
+    </div>
+  )
+  const hasContent = tab === 'qr' ? Boolean(qr) : rows.length > 0
 
   return (
     <div
@@ -465,80 +475,40 @@ export default function App() {
       onDrop={(e: DragEvent<HTMLDivElement>) => {
         e.preventDefault()
         setDropActive(false)
+        if (document.querySelector('[data-resource-popover]')) return
         const file = e.dataTransfer.files[0]
         if (tab === 'qr' && file) decodeFile(file)
       }}
     >
-      <header className="toolbar" ref={headerRef}>
-        <div className="segments" role="tablist" aria-label="工具">
-          <button
-            role="tab"
-            aria-selected={tab === 'qr'}
-            onClick={() => {
-              setTab('qr')
-              setNotice(null)
-            }}
-          >
-            二维码
-          </button>
-          <button
-            role="tab"
-            aria-selected={tab === 'rename'}
-            onClick={() => {
-              setTab('rename')
-              setNotice(null)
-            }}
-          >
-            重命名
-          </button>
-        </div>
-        <div className="toolbar-actions">
-          {tab === 'qr' ? (
-            <>
-              <button
-                className="tool-button"
-                disabled={qrBusy || !desktop}
-                onClick={() => imageInput.current?.click()}
-              >
-                <ImagePlus size={14} />
-                打开图片…
-              </button>
-              <button
-                className="primary"
-                disabled={qrBusy || !desktop}
-                onClick={() => void runQr(() => invoke<QrResult>('decode_clipboard'))}
-              >
-                {qrBusy ? (
-                  <LoaderCircle size={14} className="spin" />
-                ) : (
-                  <ClipboardPaste size={14} />
-                )}
-                粘贴
-              </button>
-            </>
-          ) : (
-            <>
-              <button
-                className="tool-button"
-                disabled={renameBusy || !desktop}
-                onClick={() => void pickRename(false)}
-              >
-                <FileVideo size={14} />
-                选择文件…
-              </button>
-              <button
-                className="tool-button"
-                disabled={renameBusy || !desktop}
-                onClick={() => void pickRename(true)}
-              >
-                <Folder size={14} />
-                选择文件夹…
-              </button>
-            </>
-          )}
+      <header className="toolbar">
+        <div className="toolbar-leading">
+          <div className="segments" role="tablist" aria-label="工具">
+            <button
+              role="tab"
+              aria-selected={tab === 'qr'}
+              onClick={() => {
+                setTab('qr')
+                setNotice(null)
+              }}
+            >
+              二维码
+            </button>
+            <button
+              role="tab"
+              aria-selected={tab === 'rename'}
+              onClick={() => {
+                setTab('rename')
+                setNotice(null)
+              }}
+            >
+              重命名
+            </button>
+          </div>
+          <ResourceSites desktop={desktop} />
         </div>
       </header>
-      <main className="workspace" ref={workspaceRef}>
+      <main className="workspace">
+        {hasContent && <div className="content-actions">{actions}</div>}
         {notice && (
           <div
             className={`notice ${notice.tone}`}
@@ -553,13 +523,12 @@ export default function App() {
         {tab === 'qr' ? (
           <section aria-label="二维码识别">
             {!qr ? (
-              <div className="empty qr-empty">
-                <ScanLine size={36} strokeWidth={1.1} />
-                <div>
-                  <p>粘贴一张二维码截图</p>
-                  <small>Ctrl + V，或将图片拖到这里</small>
-                </div>
-              </div>
+              <ToolEmptyState
+                icon={<ScanLine size={25} strokeWidth={1.5} />}
+                title="粘贴一张二维码截图"
+                description="Ctrl + V 粘贴 · 也可拖入图片"
+                actions={actions}
+              />
             ) : (
               <div className="qr-content">
                 <div className="result-heading">
@@ -827,18 +796,17 @@ export default function App() {
                 </div>
               </>
             ) : (
-              <div className="empty rename-empty">
-                <Folder size={32} strokeWidth={1.1} />
-                <div>
-                  <p>选择文件或文件夹</p>
-                  <small>自动整理其中的视频，确认预览后应用</small>
-                </div>
-              </div>
+              <ToolEmptyState
+                icon={<Folder size={25} strokeWidth={1.5} />}
+                title="整理影视名称"
+                description="拖入视频，或选择文件与文件夹"
+                actions={actions}
+              />
             )}
           </section>
         )}
       </main>
-      <footer ref={footerRef} className={`statusbar ${tab === 'rename' ? 'rename-status' : ''}`}>
+      <footer className={`statusbar ${tab === 'rename' ? 'rename-status' : ''}`}>
         {tab === 'qr' ? (
           <>
             <span>{desktop ? '本地识别' : '桌面应用中可用'}</span>

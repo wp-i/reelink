@@ -3,5 +3,5 @@
   "identifier": "main-capability",
   "description": "Local main window with file selection and window events only",
   "windows": ["main"],
-  "permissions": ["core:default", "core:window:allow-set-size", "dialog:allow-open"]
+  "permissions": ["core:default", "dialog:allow-open"]
 }

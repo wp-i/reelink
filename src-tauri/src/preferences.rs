@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use tauri_plugin_global_shortcut::Shortcut;
 use uuid::Uuid;
 
-pub const DEFAULT_SHORTCUT: &str = "Ctrl+Shift+Q";
+pub const DEFAULT_SHORTCUT: &str = "Alt+Q";
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

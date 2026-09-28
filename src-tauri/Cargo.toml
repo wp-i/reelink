@@ -1,6 +1,6 @@
 [package]
 name = "reelink"
-version = "0.1.4"
+version = "0.1.9"
 description = "A local-first Windows utility for QR codes and media filenames"
 authors = ["Reelink contributors"]
 license = "MIT"

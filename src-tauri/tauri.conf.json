@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Reelink",
-  "version": "0.1.4",
+  "version": "0.1.9",
   "identifier": "app.reelink.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -14,10 +14,10 @@
       {
         "label": "main",
         "title": "Reelink",
-        "width": 460,
-        "height": 182,
-        "minWidth": 420,
-        "minHeight": 154,
+        "width": 520,
+        "height": 240,
+        "minWidth": 480,
+        "minHeight": 220,
         "center": true,
         "backgroundColor": "#F6F6F6"
       }
@@ -28,6 +28,9 @@
   },
   "bundle": {
     "active": true,
+    "resources": {
+      "icons/icon.ico": "icons/reelink-0.1.9.ico"
+    },
     "targets": [
       "nsis"
     ],
