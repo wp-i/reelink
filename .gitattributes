@@ -1,0 +1,6 @@
+# Keep Prettier inputs at LF on Windows checkouts.
+src/** text=auto eol=lf
+extension/** text=auto eol=lf
+vite.config.ts text eol=lf
+scripts/build-extension.mjs text eol=lf
+scripts/test-extension.mjs text eol=lf
