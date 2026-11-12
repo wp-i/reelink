@@ -26,6 +26,8 @@ impl Default for SavedPreferences {
 pub struct PreferencesView {
     pub shortcut: String,
     pub shortcut_available: bool,
+    pub cold_start_configured: bool,
+    pub cold_start_error: Option<String>,
 }
 
 impl SavedPreferences {
@@ -33,6 +35,8 @@ impl SavedPreferences {
         PreferencesView {
             shortcut: self.shortcut.clone(),
             shortcut_available,
+            cold_start_configured: false,
+            cold_start_error: None,
         }
     }
 }

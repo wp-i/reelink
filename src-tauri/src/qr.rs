@@ -3,7 +3,7 @@ use std::{
     io::{Cursor, Read},
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -14,9 +14,11 @@ const MAX_INPUT_BYTES: u64 = 24 * 1024 * 1024;
 const MAX_IMAGE_PIXELS: u64 = 20_000_000;
 const MAX_IMAGE_SIDE: u32 = 12_000;
 const MAX_PREVIEW_SIDE: u32 = 1_600;
-const CAPTURE_TIMEOUT: Duration = Duration::from_secs(45);
-const CAPTURE_POLL_INTERVAL: Duration = Duration::from_millis(80);
 static CAPTURE_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+pub fn capture_active() -> bool {
+    CAPTURE_ACTIVE.load(Ordering::Acquire)
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -67,7 +69,7 @@ pub async fn capture_qr(window: tauri::WebviewWindow) -> Result<QrResult, String
         return Err(error);
     }
 
-    let result = tauri::async_runtime::spawn_blocking(capture_from_clipboard_blocking)
+    let result = tauri::async_runtime::spawn_blocking(capture_region_blocking)
         .await
         .map_err(|_| "截图处理时发生内部错误。".to_string())
         .and_then(|result| result);
@@ -338,74 +340,9 @@ mod tests {
 }
 
 #[cfg(windows)]
-fn capture_from_clipboard_blocking() -> Result<QrResult, String> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::{
-        Foundation::HWND,
-        System::DataExchange::GetClipboardSequenceNumber,
-        UI::{
-            Input::KeyboardAndMouse::{GetAsyncKeyState, VK_ESCAPE},
-            Shell::ShellExecuteW,
-            WindowsAndMessaging::SW_SHOWNORMAL,
-        },
-    };
-
-    let mut clipboard =
-        arboard::Clipboard::new().map_err(|_| "无法访问系统剪贴板。".to_string())?;
-    let previous_sequence = unsafe { GetClipboardSequenceNumber() };
-    // Allow the compositor to remove our window before Windows captures the screen.
+fn capture_region_blocking() -> Result<QrResult, String> {
+    // Let the compositor remove the main window before taking the frozen snapshot.
     std::thread::sleep(Duration::from_millis(180));
-    // Clear the old transition bit; a new Escape press cancels this capture.
-    unsafe { GetAsyncKeyState(VK_ESCAPE as i32) };
-
-    let verb: Vec<u16> = std::ffi::OsStr::new("open")
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
-    let uri: Vec<u16> = std::ffi::OsStr::new("ms-screenclip:")
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
-    let launched = unsafe {
-        ShellExecuteW(
-            std::ptr::null_mut::<std::ffi::c_void>() as HWND,
-            verb.as_ptr(),
-            uri.as_ptr(),
-            std::ptr::null(),
-            std::ptr::null(),
-            SW_SHOWNORMAL,
-        )
-    };
-    if (launched as isize) <= 32 {
-        return Err("无法启动 Windows 截图工具。".to_string());
-    }
-
-    let start = Instant::now();
-    while start.elapsed() < CAPTURE_TIMEOUT {
-        std::thread::sleep(CAPTURE_POLL_INTERVAL);
-        if unsafe { GetAsyncKeyState(VK_ESCAPE as i32) } != 0 {
-            return Err("已取消屏幕截图。".into());
-        }
-        if unsafe { GetClipboardSequenceNumber() } != previous_sequence {
-            if let Some((width, height, bytes)) = read_clipboard_image(&mut clipboard) {
-                let pixels = checked_pixel_count(width, height)?;
-                if bytes.len() as u64 != pixels * 4 {
-                    return Err("截图图片数据不完整，无法读取。".to_string());
-                }
-                let buffer = ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(width, height, bytes)
-                    .ok_or_else(|| "无法读取截图图片。".to_string())?;
-                return decode_dynamic_image(DynamicImage::ImageRgba8(buffer));
-            }
-        }
-    }
-    Err("截图已取消或等待超时，请重新尝试。".to_string())
-}
-
-#[cfg(windows)]
-fn read_clipboard_image(clipboard: &mut arboard::Clipboard) -> Option<(u32, u32, Vec<u8>)> {
-    let image = clipboard.get_image().ok()?;
-    let width = u32::try_from(image.width).ok()?;
-    let height = u32::try_from(image.height).ok()?;
-    checked_pixel_count(width, height).ok()?;
-    Some((width, height, image.bytes.into_owned()))
+    let image = crate::screen_capture::capture_region()?;
+    decode_dynamic_image(DynamicImage::ImageRgba8(image))
 }

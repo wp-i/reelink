@@ -3128,11 +3128,12 @@ dependencies = [
 
 [[package]]
 name = "reelink"
-version = "0.1.9"
+version = "0.2.2"
 dependencies = [
  "arboard",
  "base64 0.22.1",
  "chrono",
+ "dirs",
  "image",
  "qrcode",
  "regex",
@@ -3148,6 +3149,8 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tempfile",
  "uuid",
+ "webview2-com",
+ "windows",
  "windows-sys 0.61.2",
 ]
 

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Reelink</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <div class="brand">
+        <img class="mark" src="icons/48.png" alt="" aria-hidden="true" />
+        <div>
+          <h1>Reelink</h1>
+          <p>网页二维码截图识别</p>
+        </div>
+      </div>
+      <button id="capture" class="capture" type="button">截图识别</button>
+      <p id="status" class="status" role="status"></p>
+      <div class="shortcut"><span>快捷键</span><strong id="shortcut">读取中…</strong></div>
+      <button id="settings" class="settings" type="button">设置快捷键 ↗</button>
+      <p class="note">
+        截图在本地识别。一个结果自动复制；多个结果可逐条选择复制。浏览器需要位于前台，部分内置页面会在新标签中框选。桌面版
+        Alt+Q 可能与浏览器快捷键冲突。
+      </p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

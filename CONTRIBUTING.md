@@ -13,6 +13,16 @@ cargo fmt --manifest-path src-tauri/Cargo.toml --check
 npm test
 ```
 
+Chrome 扩展单独构建与格式检查：
+
+```powershell
+npm run build:extension
+npm run format:extension
+npm run test:extension
+```
+
+手动加载扩展时，先构建，再从 Chrome 开发者模式加载仓库根目录下的 `dist-extension`，不要加载 `extension` 源码目录。扩展支持 Chrome 116 及更新版本；不要据此声称旧版 Chrome 或所有网站均已验证。浏览器测试需确认只捕获当前可见标签页、内置页截图页面回退、Esc/超时清理、单码自动复制及多码手动选择。`file://` 页面还需在扩展详情中允许访问文件网址。桌面版 Alt+Q 与扩展建议快捷键可能冲突，Chrome 扩展快捷键可在 `chrome://extensions/shortcuts` 调整。
+
 文件操作改动应覆盖冲突、不覆盖目标、目录边界、异常恢复和重启后撤销。名称规则改动应包含普通名称和容易误判的反例。请使用临时目录创建测试数据，不用真实媒体库测试。
 
 问题反馈请提供 Windows 版本、复现步骤、匿名化的原名和期望名称。不要上传任何凭证、私有链接、个人截图或包含私人路径的完整日志。TMDb 功能不能要求终端用户配置 Key，也不能分发他人的 Key。

@@ -2,7 +2,7 @@
 
 Reelink's own source code and app icon are licensed under MIT. Dependencies retain their own licenses; consult the resolved versions in `package-lock.json` and `src-tauri/Cargo.lock` and their package license files.
 
-Principal components include Tauri (MIT / Apache-2.0), React (MIT), Vite (MIT), Lucide icons (ISC), image (MIT / Apache-2.0), rqrr (MIT), arboard (MIT / Apache-2.0), and reqwest (MIT / Apache-2.0).
+Principal components include Tauri (MIT / Apache-2.0), React (MIT), Vite (MIT), Lucide icons (ISC), image (MIT / Apache-2.0), rqrr (MIT), jsQR (Apache-2.0; used by the Chrome extension), arboard (MIT / Apache-2.0), and reqwest (MIT / Apache-2.0). The extension package includes `jsQR-LICENSE.txt` and this notice file.
 
 The TMDB logo in `public/tmdb-logo.svg` is an official TMDB asset and is not covered by Reelink's MIT license. Source: https://www.themoviedb.org/about/logos-attribution
 

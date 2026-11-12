@@ -1,6 +1,6 @@
 # Reelink 开发协作约定
 
-本文件适用于整个仓库。新对话开始开发前先阅读本文件、README.md、CONTRIBUTING.md 和相关的 docs/CONTRACT.md。
+本文件适用于整个仓库。新对话开始开发前先阅读本文件、[开发交接](HANDOFF.md)、README.md、CONTRIBUTING.md 和相关的 docs/CONTRACT.md。
 
 ## 默认使用子任务协作
 

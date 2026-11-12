@@ -45,8 +45,38 @@ declare global {
 interface Preferences {
   shortcut: string
   shortcutAvailable: boolean
+  coldStartConfigured: boolean
+  coldStartError: string | null
 }
 const desktop = Boolean(window.__TAURI_INTERNALS__)
+let captureReceiver: (() => void) | null = null
+let captureQueued = false
+let captureListenerSetup: Promise<void> | null = null
+
+function dispatchCaptureRequest() {
+  if (captureReceiver) captureReceiver()
+  else captureQueued = true
+}
+
+function ensureCaptureListener() {
+  if (!captureListenerSetup) {
+    captureListenerSetup = listen('capture-requested', dispatchCaptureRequest)
+      .then(async (unlisten) => {
+        try {
+          if (await invoke<boolean>('capture_frontend_ready')) dispatchCaptureRequest()
+        } catch (error) {
+          unlisten()
+          throw error
+        }
+      })
+      .catch((error: unknown) => {
+        captureListenerSetup = null
+        throw error
+      })
+  }
+  return captureListenerSetup
+}
+
 const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp']
 const movieExtensions = ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'm4v', 'ts', 'flv']
 const errorText = (error: unknown) =>
@@ -105,6 +135,8 @@ export default function App() {
   const [rows, setRows] = useState<PreviewRow[]>([])
   const [history, setHistory] = useState<HistorySummary | null>(null)
   const [shortcutAvailable, setShortcutAvailable] = useState(true)
+  const [coldStartConfigured, setColdStartConfigured] = useState(false)
+  const [coldStartError, setColdStartError] = useState<string | null>(null)
   const [notice, setNotice] = useState<{ tone: 'error' | 'success' | 'info'; text: string } | null>(
     null,
   )
@@ -223,6 +255,8 @@ export default function App() {
       .then((prefs) => {
         setShortcut(prefs.shortcut)
         setShortcutAvailable(prefs.shortcutAvailable)
+        setColdStartConfigured(prefs.coldStartConfigured)
+        setColdStartError(prefs.coldStartError)
       })
       .catch((error) => {
         setShortcutAvailable(false)
@@ -232,16 +266,19 @@ export default function App() {
   useEffect(() => {
     if (!desktop) return
     let active = true
-    const cleanups: Array<() => void> = []
-    void listen('capture-requested', () => {
+    const receiveCapture = () => {
       setTab('qr')
       void runQr(() => invoke<QrResult>('capture_qr'))
+    }
+    captureReceiver = receiveCapture
+    if (captureQueued) {
+      captureQueued = false
+      receiveCapture()
+    }
+    void ensureCaptureListener().catch((error) => {
+      if (active) showError(error)
     })
-      .then((unlisten) => {
-        if (active) cleanups.push(unlisten)
-        else unlisten()
-      })
-      .catch(showError)
+    const cleanups: Array<() => void> = []
     void getCurrentWebview()
       .onDragDropEvent((event) => {
         if (document.querySelector('[data-resource-popover]')) return
@@ -265,6 +302,7 @@ export default function App() {
       .catch(showError)
     return () => {
       active = false
+      if (captureReceiver === receiveCapture) captureReceiver = null
       cleanups.forEach((fn) => fn())
     }
   }, [previewPaths, runQr, showError])
@@ -296,9 +334,20 @@ export default function App() {
       const prefs = await invoke<Preferences>('update_preferences', { shortcut: shortcutDraft })
       setShortcut(prefs.shortcut)
       setShortcutAvailable(prefs.shortcutAvailable)
+      setColdStartConfigured(prefs.coldStartConfigured)
+      setColdStartError(prefs.coldStartError)
       setShortcutDraft(null)
     } catch (error) {
       setPrefsError(errorText(error))
+      try {
+        const prefs = await invoke<Preferences>('get_preferences')
+        setShortcut(prefs.shortcut)
+        setShortcutAvailable(prefs.shortcutAvailable)
+        setColdStartConfigured(prefs.coldStartConfigured)
+        setColdStartError(prefs.coldStartError)
+      } catch {
+        // Keep the actionable save error in the inline editor.
+      }
     } finally {
       prefsBusyRef.current = false
       setPrefsBusy(false)
@@ -811,17 +860,31 @@ export default function App() {
           <>
             <span>{desktop ? '本地识别' : '桌面应用中可用'}</span>
             <button
-              className={`shortcut-button ${shortcutAvailable ? '' : 'unavailable'}`}
+              className={`shortcut-button ${shortcutAvailable || coldStartConfigured ? '' : 'unavailable'}`}
               disabled={!desktop}
               aria-label="修改截图快捷键"
-              title="修改截图快捷键"
+              title={
+                coldStartError
+                  ? `${coldStartError} 点击检查或重试。`
+                  : coldStartConfigured
+                    ? 'Windows 启动快捷键已配置；点击修改，若有冲突请更换组合'
+                    : '修改截图快捷键'
+              }
               onClick={() => {
                 setShortcutDraft(shortcut)
-                setPrefsError('')
+                setPrefsError(coldStartError ?? '')
               }}
             >
               <Keyboard size={13} />
-              <span>{shortcutAvailable ? '截图' : '快捷键被占用'}</span>
+              <span>
+                {coldStartError
+                  ? '截图设置需检查'
+                  : coldStartConfigured
+                    ? '启动截图'
+                    : shortcutAvailable
+                      ? '截图'
+                      : '快捷键被占用'}
+              </span>
               <kbd>{shortcut.replaceAll('+', ' + ')}</kbd>
             </button>
           </>

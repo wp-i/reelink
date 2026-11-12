@@ -1,6 +1,6 @@
 {
   "name": "reelink",
-  "version": "0.1.9",
+  "version": "0.2.2",
   "private": true,
   "type": "module",
   "description": "A local-first Windows utility for QR codes and media filenames",
@@ -15,21 +15,29 @@
     "test": "cargo test --manifest-path src-tauri/Cargo.toml",
     "check": "tsc -b && cargo check --manifest-path src-tauri/Cargo.toml",
     "format": "prettier --write src vite.config.ts && cargo fmt --manifest-path src-tauri/Cargo.toml",
-    "format:check": "prettier --check src vite.config.ts && cargo fmt --manifest-path src-tauri/Cargo.toml --check"
+    "format:check": "prettier --check src vite.config.ts && cargo fmt --manifest-path src-tauri/Cargo.toml --check",
+    "build:extension": "node scripts/build-extension.mjs",
+    "package:extension": "node scripts/build-extension.mjs --package",
+    "test:extension": "node scripts/test-extension.mjs",
+    "format:extension": "prettier --check extension scripts/build-extension.mjs scripts/test-extension.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-dialog": "^2.6.0",
+    "jsqr": "^1.4.0",
     "lucide-react": "^0.468.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.5",
+    "@types/chrome": "^0.1.24",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^4.5.0",
+    "esbuild": "^0.25.12",
     "prettier": "^3.9.9",
+    "qrcode": "^1.5.4",
     "typescript": "~5.8.3",
     "vite": "^6.4.0"
   }

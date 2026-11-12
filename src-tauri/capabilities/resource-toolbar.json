@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "resource-toolbar-events",
+  "description": "Local browser toolbar receives its own navigation state; remote pages have no capabilities",
+  "local": true,
+  "webviews": ["resource-toolbar-*"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+}

@@ -1,7 +1,19 @@
 use serde::{Deserialize, Serialize};
-use std::{fs, io::Write, path::PathBuf, sync::Mutex};
-use tauri::{Manager, State, Url, WebviewUrl, WebviewWindowBuilder};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    io::Write,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+};
+use tauri::{Manager, State, Url, WebviewBuilder, WebviewUrl, WindowBuilder};
 use uuid::Uuid;
+
+pub(crate) mod browser;
+pub use browser::is_trusted_resource_toolbar;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct ResourceSite {
@@ -13,6 +25,8 @@ pub struct ResourceSite {
 pub struct ResourceStore {
     path: PathBuf,
     lock: Mutex<()>,
+    opening: Arc<Mutex<HashSet<String>>>,
+    browsers: Mutex<HashMap<String, browser::BrowserSession>>,
 }
 
 impl ResourceStore {
@@ -20,6 +34,8 @@ impl ResourceStore {
         Self {
             path,
             lock: Mutex::new(()),
+            opening: Arc::new(Mutex::new(HashSet::new())),
+            browsers: Mutex::new(HashMap::new()),
         }
     }
 
@@ -163,7 +179,7 @@ pub fn save_resource_site(
     }
     state.save(&sites)?;
     if let Some(id) = changed_id {
-        if let Some(window) = app.get_webview_window(&format!("resource-{id}")) {
+        if let Some(window) = app.get_window(&format!("resource-{id}")) {
             let _ = window.close();
         }
     }
@@ -184,7 +200,7 @@ pub fn delete_resource_site(
         .ok_or("网站已不存在，请刷新列表。")?;
     sites.remove(index);
     state.save(&sites)?;
-    if let Some(window) = app.get_webview_window(&format!("resource-{id}")) {
+    if let Some(window) = app.get_window(&format!("resource-{id}")) {
         let _ = window.close();
     }
     Ok(sites)
@@ -196,6 +212,8 @@ pub async fn open_resource_site(
     state: State<'_, ResourceStore>,
     id: String,
 ) -> Result<(), String> {
+    #[cfg(debug_assertions)]
+    let opened_at = std::time::Instant::now();
     let site = {
         let _guard = state.lock.lock().map_err(|_| "资源网站状态异常")?;
         state
@@ -206,14 +224,23 @@ pub async fn open_resource_site(
     };
     let url = validate_url(&site.url)?;
     let label = format!("resource-{}", site.id);
-    if let Some(window) = app.get_webview_window(&label) {
-        window
-            .set_title(&format!("{} · 资源网站", site.name))
-            .map_err(|e| e.to_string())?;
-        window.unminimize().map_err(|e| e.to_string())?;
-        window.show().map_err(|e| e.to_string())?;
-        return window.set_focus().map_err(|e| e.to_string());
-    }
+    // Reserve the label through attachment/cleanup so an older request cannot
+    // attach to a newer window with the same label after a loading window closes.
+    let pending = {
+        let mut opening = state.opening.lock().map_err(|_| "资源窗口状态异常")?;
+        if let Some(window) = app.get_window(&label) {
+            window.unminimize().map_err(|e| e.to_string())?;
+            window.show().map_err(|e| e.to_string())?;
+            return window.set_focus().map_err(|e| e.to_string());
+        }
+        if !opening.insert(label.clone()) {
+            return Err("网站窗口仍在结束上次加载，请稍后重试。".into());
+        }
+        OpeningReservation {
+            labels: state.opening.clone(),
+            label: label.clone(),
+        }
+    };
     let browsing_data = app
         .path()
         .app_local_data_dir()
@@ -221,26 +248,212 @@ pub async fn open_resource_site(
         .join("resource-webviews")
         .join(&site.id);
     fs::create_dir_all(&browsing_data).map_err(|e| format!("无法创建网站数据目录：{e}"))?;
-    let navigation_app = app.clone();
-    let navigation_label = label.clone();
-    WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(url))
-        .title(format!("{} · 资源网站", site.name))
+    let title = format!("{} · 资源网站", site.name);
+    let toolbar_label = format!("resource-toolbar-{}", site.id);
+    let toolbar_path = format!("index.html?resource={}", site.id);
+    let toolbar_url = app
+        .get_webview("main")
+        .ok_or("主窗口不可用")?
+        .url()
+        .map_err(|e| e.to_string())?
+        .join(&toolbar_path)
+        .map_err(|e| e.to_string())?;
+    let session =
+        browser::BrowserSession::new(site.url.clone(), site.name.clone(), toolbar_url.clone());
+    // Native feedback is visible before the per-site WebView2 cold start.
+    let window = WindowBuilder::new(&app, &label)
+        .title(format!("正在打开 {}…", site.name))
         .inner_size(1100.0, 760.0)
         .min_inner_size(640.0, 480.0)
+        .background_color(tauri::utils::config::Color(245, 245, 247, 255))
+        .build()
+        .map_err(|e| format!("无法打开网站窗口：{e}"))?;
+    state
+        .browsers
+        .lock()
+        .map_err(|_| "网站状态异常")?
+        .insert(label.clone(), session.clone());
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let window_cancelled = cancelled.clone();
+    let event_window = window.clone();
+    let event_app = app.clone();
+    let event_label = label.clone();
+    let event_session = session.clone();
+    window.on_window_event(move |event| {
+        if matches!(
+            event,
+            tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
+        ) {
+            window_cancelled.store(true, Ordering::Release);
+        }
+        if matches!(event, tauri::WindowEvent::Destroyed) {
+            if let Ok(mut sessions) = event_app.state::<ResourceStore>().browsers.lock() {
+                if sessions
+                    .get(&event_label)
+                    .is_some_and(|current| Arc::ptr_eq(&current.state, &event_session.state))
+                {
+                    sessions.remove(&event_label);
+                }
+            }
+        }
+        if matches!(
+            event,
+            tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. }
+        ) {
+            browser::layout(&event_window);
+        }
+    });
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[resource-open] window-visible {}ms",
+        opened_at.elapsed().as_millis()
+    );
+    let navigation_app = app.clone();
+    let navigation_label = label.clone();
+    let navigation_session = session.clone();
+    #[cfg(debug_assertions)]
+    let first_load_events = std::sync::atomic::AtomicU8::new(0);
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[resource-open] before-create {}ms",
+        opened_at.elapsed().as_millis()
+    );
+    let loading_session = session.clone();
+    let loading_label = label.clone();
+    let builder = WebviewBuilder::new(&label, WebviewUrl::External(url))
         .data_directory(browsing_data)
+        .on_page_load(move |webview, payload| {
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished)
+                && browser::is_current_session(
+                    webview.app_handle(),
+                    &loading_label,
+                    &loading_session,
+                )
+            {
+                let _ = webview.window().set_title(&title);
+                // Covers a very fast initial load that finishes before native
+                // event installation. Native completion also handles failures.
+                if !loading_session.native_ready.load(Ordering::Acquire) {
+                    browser::set_loading(
+                        webview.app_handle(),
+                        &loading_label,
+                        &loading_session,
+                        false,
+                    );
+                }
+            }
+            // Local development timing only: never record the site's URL, title,
+            // profile directory or page contents. A load event is not proof that
+            // the page is visually ready, and redirects may produce more events.
+            #[cfg(debug_assertions)]
+            {
+                let (bit, phase) = match payload.event() {
+                    tauri::webview::PageLoadEvent::Started => (1, "first-start"),
+                    tauri::webview::PageLoadEvent::Finished => (2, "first-finish"),
+                };
+                if first_load_events.fetch_or(bit, std::sync::atomic::Ordering::Relaxed) & bit == 0
+                {
+                    eprintln!(
+                        "[resource-open] {phase} {}ms",
+                        opened_at.elapsed().as_millis()
+                    );
+                }
+            }
+            #[cfg(not(debug_assertions))]
+            let _ = payload;
+        })
         .on_navigation(|url| validate_url(url.as_str()).is_ok())
         .on_new_window(move |url, _| {
-            if validate_url(url.as_str()).is_ok() {
-                if let Some(window) = navigation_app.get_webview_window(&navigation_label) {
+            if validate_url(url.as_str()).is_ok()
+                && browser::is_current_session(
+                    &navigation_app,
+                    &navigation_label,
+                    &navigation_session,
+                )
+            {
+                if let Some(window) = navigation_app.get_webview(&navigation_label) {
                     let _ = window.navigate(url);
                 }
             }
             tauri::webview::NewWindowResponse::Deny
         })
-        .on_download(|_, _| false)
-        .build()
-        .map_err(|e| format!("无法打开网站窗口：{e}"))?;
-    Ok(())
+        .on_download(|_, _| false);
+    let toolbar_builder = WebviewBuilder::new(&toolbar_label, WebviewUrl::App(toolbar_path.into()))
+        .on_navigation(move |url| *url == toolbar_url)
+        .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
+        .on_download(|_, _| false);
+    tauri::async_runtime::spawn_blocking(move || {
+        let _pending = pending;
+        let result = (|| {
+            // Recheck edits/deletion that arrived during native window creation.
+            let state = app.state::<ResourceStore>();
+            let current = {
+                let _guard = state.lock.lock().map_err(|_| "资源网站状态异常")?;
+                state.load()?.into_iter().any(|current| current == site)
+            };
+            if !current {
+                cancelled.store(true, Ordering::Release);
+            }
+            if cancelled.load(Ordering::Acquire) {
+                return Ok(());
+            }
+            let size = window
+                .inner_size()
+                .map_err(|e| e.to_string())?
+                .to_logical::<f64>(window.scale_factor().map_err(|e| e.to_string())?);
+            let toolbar = window
+                .add_child(
+                    toolbar_builder,
+                    tauri::LogicalPosition::new(0.0, 0.0),
+                    tauri::LogicalSize::new(size.width, browser::TOOLBAR_HEIGHT),
+                )
+                .map_err(|e| format!("无法打开网站工具栏：{e}"))?;
+            if cancelled.load(Ordering::Acquire) {
+                let _ = toolbar.close();
+                return Ok(());
+            }
+            let webview = window
+                .add_child(
+                    builder,
+                    tauri::LogicalPosition::new(0.0, browser::TOOLBAR_HEIGHT),
+                    tauri::LogicalSize::new(
+                        size.width,
+                        (size.height - browser::TOOLBAR_HEIGHT).max(1.0),
+                    ),
+                )
+                .map_err(|e| format!("无法打开网站网页：{e}"))?;
+            browser::install(&webview, session)?;
+            browser::layout(&window);
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "[resource-open] webview-ready {}ms",
+                opened_at.elapsed().as_millis()
+            );
+            if cancelled.load(Ordering::Acquire) {
+                let _ = webview.close();
+            }
+            Ok(())
+        })();
+        if result.is_err() || cancelled.load(Ordering::Acquire) {
+            let _ = window.close();
+        }
+        result
+    })
+    .await
+    .map_err(|e| format!("网站窗口任务失败：{e}"))?
+}
+
+struct OpeningReservation {
+    labels: Arc<Mutex<HashSet<String>>>,
+    label: String,
+}
+
+impl Drop for OpeningReservation {
+    fn drop(&mut self) {
+        if let Ok(mut labels) = self.labels.lock() {
+            labels.remove(&self.label);
+        }
+    }
 }
 
 #[cfg(windows)]
